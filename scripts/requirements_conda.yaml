@@ -1,12 +1,13 @@
 name: imaginaire
 channels:
-  - conda-forge
   - pytorch
+  - nvidia
+  - conda-forge
 dependencies:
-  - python=3.8
-  - pytorch=1.9
+  - python=3.10
+  - pytorch
   - torchvision
-  - cudatoolkit-dev
+  - pytorch-cuda=12.4
   - pip
   - numpy
   - scipy
