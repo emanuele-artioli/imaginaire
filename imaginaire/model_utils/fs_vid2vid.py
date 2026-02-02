@@ -676,6 +676,7 @@ def get_face_bbox_for_output(data_cfg, pose, crop_smaller=0):
 
     use_openpose = 'pose_maps-densepose' not in data_cfg.input_labels
     if use_openpose:  # Use openpose face keypoints to identify face region.
+        num_ch = 3  # Default to 3 channels
         for input_type in data_cfg.input_types:
             if 'poses-openpose' in input_type:
                 num_ch = input_type['poses-openpose'].num_channels

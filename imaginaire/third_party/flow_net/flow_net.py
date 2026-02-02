@@ -25,11 +25,16 @@ class FlowNet(nn.Module):
         self.flowNet = flownet2_tools.module_to_dict(flownet2_models)[
             'FlowNet2'](flownet2_args).to('cuda')
         if pretrained:
-            flownet2_path = get_checkpoint('flownet2.pth.tar',
-                                           '1hF8vS6YeHkx3j2pfCeQqqZGwA_PJq_Da')
-            checkpoint = torch.load(flownet2_path,
-                                    map_location=torch.device('cpu'))
-            self.flowNet.load_state_dict(checkpoint['state_dict'])
+            try:
+                flownet2_path = get_checkpoint('flownet2.pth.tar',
+                                               '1hF8vS6YeHkx3j2pfCeQqqZGwA_PJq_Da')
+                checkpoint = torch.load(flownet2_path,
+                                        map_location=torch.device('cpu'))
+                self.flowNet.load_state_dict(checkpoint['state_dict'])
+                print('FlowNet2 pretrained weights loaded successfully.')
+            except Exception as e:
+                print(f'Warning: Could not load FlowNet2 pretrained weights: {e}')
+                print('FlowNet2 will be used with random initialization.')
         self.flowNet.eval()
 
     def forward(self, input_A, input_B):

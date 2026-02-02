@@ -1,7 +1,7 @@
 # flake8: noqa
 from torch.nn.modules.module import Module
 from torch.autograd import Function, Variable
-from torch.cuda.amp import autocast
+from torch.amp import autocast
 import resample2d_cuda
 
 
