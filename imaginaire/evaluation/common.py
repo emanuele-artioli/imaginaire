@@ -9,7 +9,7 @@ import torch
 import torch.distributed as dist
 from torch import nn
 from torch.nn import functional as F
-from torchvision.models import inception_v3
+from torchvision.models import inception_v3, Inception_V3_Weights
 from cleanfid.features import feature_extractor
 from cleanfid.resize import build_resizer
 
@@ -522,7 +522,7 @@ def get_video_activations(data_loader, key_real, key_fake, trainer=None,
 
 
 def inception_init():
-    inception = inception_v3(pretrained=True, transform_input=False)
+    inception = inception_v3(weights=Inception_V3_Weights.IMAGENET1K_V1, transform_input=False)
     inception = inception.to('cuda')
     inception.eval()
     inception.fc = torch.nn.Sequential()
@@ -587,7 +587,7 @@ def load_or_compute_activations(act_path, data_loader, key_real, key_fake,
     if act_path is not None and os.path.exists(act_path):
         # Loading precomputed activations.
         print('Load activations from {}'.format(act_path))
-        act = torch.load(act_path, map_location='cpu', weights_only=False).cuda()
+        act = torch.load(act_path, map_location='cpu').cuda()
     else:
         # Compute activations.
         if is_video:

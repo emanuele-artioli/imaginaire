@@ -74,10 +74,13 @@ class BaseTrainer(object):
         # Initialize amp.
         if self.cfg.trainer.amp_config.enabled:
             print("Using automatic mixed precision training.")
-        self.scaler_G = GradScaler('cuda', **vars(self.cfg.trainer.amp_config))
-        self.scaler_D = GradScaler('cuda', **vars(self.cfg.trainer.amp_config))
+        self.scaler_G = GradScaler("cuda", **vars(self.cfg.trainer.amp_config))
+        self.scaler_D = GradScaler("cuda", **vars(self.cfg.trainer.amp_config))
         # In order to check whether the discriminator/generator has
         # skipped the last parameter update due to gradient overflow.
+        # Using our own counter instead of opt._step_count for PyTorch 2.x compatibility
+        self.step_count_G = 0
+        self.step_count_D = 0
         self.last_step_count_G = 0
         self.last_step_count_D = 0
         self.skipped_G = False
@@ -153,18 +156,6 @@ class BaseTrainer(object):
         if 'TORCH_HOME' not in os.environ:
             os.environ['TORCH_HOME'] = os.path.join(
                 os.environ['HOME'], ".cache")
-
-    def _get_optimizer_step_count(self, optimizer):
-        r"""Get the step count from an optimizer, handling PyTorch 2.x changes."""
-        # In PyTorch 2.x, _step_count was changed. We use state dict to track steps.
-        if hasattr(optimizer, '_step_count'):
-            return optimizer._step_count
-        # Fallback for PyTorch 2.x: count unique steps in state
-        state_dict = optimizer.state_dict()
-        if 'state' in state_dict and state_dict['state']:
-            # Return the number of state entries as a proxy for step count
-            return len(state_dict['state'])
-        return 0
 
     def _init_tensorboard(self):
         r"""Initialize the tensorboard. Different algorithms might require
@@ -290,7 +281,7 @@ class BaseTrainer(object):
             return resume, current_epoch, current_iteration
         # Load checkpoint
         checkpoint = torch.load(
-            checkpoint_path, map_location=lambda storage, loc: storage, weights_only=False)
+            checkpoint_path, map_location=lambda storage, loc: storage)
         current_epoch = 0
         current_iteration = 0
         if resume:
@@ -328,7 +319,7 @@ class BaseTrainer(object):
                 else:
                     net_G_module = self.net_G.module
                 if hasattr(net_G_module, 'load_pretrained_network'):
-                    net_G_module.load_pretrained_network(self.net_G, checkpoint['net_G'])
+                    net_G_module.load_pretrained_network(checkpoint['net_G'])
                     print('Load generator weights only.')
                 else:
                     raise ValueError('Checkpoint cannot be loaded.')
@@ -486,13 +477,13 @@ class BaseTrainer(object):
         self.time_epoch = elapsed_epoch_time
         self._end_of_epoch(data, current_epoch, current_iteration)
 
-        # Save everything to the checkpoint.
-        if current_iteration % self.cfg.snapshot_save_iter == 0:
+        # Save everything to the checkpoint (epoch-based saving).
+        if current_epoch % self.cfg.snapshot_save_epoch == 0:
             if current_epoch >= self.cfg.snapshot_save_start_epoch:
                 self.save_checkpoint(current_epoch, current_iteration)
 
-        # Compute metrics.
-        if current_iteration % self.cfg.metrics_iter == 0:
+        # Compute metrics (epoch-based).
+        if current_epoch % self.cfg.metrics_epoch == 0:
             self.save_image(self._get_save_path('images', 'jpg'), data)
             self.write_metrics()
 
@@ -699,7 +690,7 @@ class BaseTrainer(object):
 
             # Compute the loss.
             self._time_before_forward()
-            with autocast('cuda', enabled=self.cfg.trainer.amp_config.enabled):
+            with autocast("cuda", enabled=self.cfg.trainer.amp_config.enabled):
                 total_loss = self.gen_forward(data)
             if total_loss is None:
                 return
@@ -733,16 +724,19 @@ class BaseTrainer(object):
 
             # Perform an optimizer step.
             self._time_before_step()
+            # Track scale before step to detect overflow
+            old_scale = self.scaler_G.get_scale()
             self.scaler_G.step(self.opt_G)
             self.scaler_G.update()
-            # Whether the step above was skipped.
-            if self.last_step_count_G == self._get_optimizer_step_count(self.opt_G):
+            new_scale = self.scaler_G.get_scale()
+            # Whether the step above was skipped (scale decreased means overflow).
+            if new_scale < old_scale:
                 print("Generator overflowed!")
                 if not torch.isfinite(total_loss):
                     print("Generator loss is not finite. Skip this iteration!")
                     update_finished = True
             else:
-                self.last_step_count_G = self._get_optimizer_step_count(self.opt_G)
+                self.step_count_G += 1
                 update_finished = True
 
         self._extra_gen_step(data)
@@ -776,7 +770,7 @@ class BaseTrainer(object):
 
             # Compute the loss.
             self._time_before_forward()
-            with autocast('cuda', enabled=self.cfg.trainer.amp_config.enabled):
+            with autocast("cuda", enabled=self.cfg.trainer.amp_config.enabled):
                 total_loss = self.dis_forward(data)
             if total_loss is None:
                 return
@@ -809,17 +803,20 @@ class BaseTrainer(object):
 
             # Perform an optimizer step.
             self._time_before_step()
+            # Track scale before step to detect overflow
+            old_scale = self.scaler_D.get_scale()
             self.scaler_D.step(self.opt_D)
             self.scaler_D.update()
-            # Whether the step above was skipped.
-            if self.last_step_count_D == self._get_optimizer_step_count(self.opt_D):
+            new_scale = self.scaler_D.get_scale()
+            # Whether the step above was skipped (scale decreased means overflow).
+            if new_scale < old_scale:
                 print("Discriminator overflowed!")
                 if not torch.isfinite(total_loss):
                     print("Discriminator loss is not finite. "
                           "Skip this iteration!")
                     update_finished = True
             else:
-                self.last_step_count_D = self._get_optimizer_step_count(self.opt_D)
+                self.step_count_D += 1
                 update_finished = True
 
         self._extra_dis_step(data)

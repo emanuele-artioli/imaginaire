@@ -30,6 +30,7 @@ except ImportError:
     from torch.utils.model_zoo import load_url as load_state_dict_from_url
 
 from torchvision.models import inception, inception_v3, vgg16
+from torchvision.models import VGG16_Weights, Inception_V3_Weights
 
 # Inception weights ported to Pytorch from
 # http://download.tensorflow.org/models/image/imagenet/inception-2015-12-05.tgz
@@ -53,7 +54,7 @@ class SwAV(nn.Module):
 class Vgg16(nn.Module):
     def __init__(self):
         super().__init__()
-        self.model = vgg16(pretrained=True, init_weights=False)
+        self.model = vgg16(weights=VGG16_Weights.IMAGENET1K_V1, init_weights=False)
         self.model.classifier = torch.nn.Sequential(
             *[self.model.classifier[i] for i in range(4)]
         )
@@ -68,7 +69,7 @@ class InceptionV3(nn.Module):
     def __init__(self):
         super().__init__()
         self.model = inception_v3(transform_input=False,
-                                  pretrained=True,
+                                  weights=Inception_V3_Weights.IMAGENET1K_V1,
                                   init_weights=False)
         self.model.fc = torch.nn.Sequential()
 

@@ -1,0 +1,252 @@
+# Tennis Pose fs_vid2vid Configuration
+# Optimized for PointStream dataset with YOLO pose skeletons
+# Hardware: 2x NVIDIA RTX A6000 (48GB each)
+
+# How often do you want to save output images during training.
+image_save_iter: 100
+# How often do you want to save trained models.
+snapshot_save_epoch: 5
+# How often do you want to log the training stats.
+logging_iter: 100
+# Number of training epochs.
+max_epoch: 20
+# Number of epochs training single frame generator.
+single_frame_epoch: 0
+# How often to double the number of training frames in each clip.
+num_epochs_temporal_step: 5
+
+# Trainer options
+trainer:
+    type: imaginaire.trainers.fs_vid2vid
+    amp_config:
+        enabled: True  # Use AMP for memory efficiency
+    model_average_config:
+        enabled: True
+        beta: 0.9999
+        start_iteration: 500
+        num_batch_norm_estimation_iterations: 0
+    num_videos_to_test: 64
+    num_frames_per_video: 10
+
+    gan_mode: hinge
+    gan_relativistic: False
+    perceptual_loss:
+        mode: 'vgg19'
+        layers: ['relu_1_1', 'relu_2_1', 'relu_3_1', 'relu_4_1', 'relu_5_1']
+        weights: [0.03125, 0.0625, 0.125, 0.25, 1.0]
+        num_scales: 3
+    loss_weight:
+        gan: 1.0
+        feature_matching: 10.0
+        temporal_gan: 0.0
+        perceptual: 10.0
+        flow: 10.0
+    init:
+        type: xavier
+        gain: 0.02
+
+# Optimization - tuned for RTX A6000
+gen_opt:
+    type: adam
+    lr: 0.0001
+    adam_beta1: 0.
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: False
+        type: step
+        step_size: 15
+        gamma: 0.1
+
+dis_opt:
+    type: adam
+    lr: 0.0004
+    adam_beta1: 0.
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: False
+        type: step
+        step_size: 15
+        gamma: 0.1
+
+# Generator configuration
+gen:
+    type: imaginaire.generators.fs_vid2vid
+    num_filters: 32
+    max_num_filters: 1024
+    num_downsamples: 5
+    activation_norm_type: spatially_adaptive
+    activation_norm_params:
+        activation_norm_type: instance
+        num_filters: 0
+        kernel_size: 1
+    weight_norm_type: spectral
+    hyper:
+        is_hyper_spade: True
+        is_hyper_embed: True
+        is_hyper_conv: False
+        kernel_size: 3
+        num_hyper_layers: 4
+        num_fc_layers: 2
+        activation_norm_type: instance
+        weight_norm_type: spectral
+        method_to_use_ref_labels: mul
+        attention:
+            num_filters: 32
+            num_downsamples: 2
+    flow:
+        warp_ref: True
+        generate_raw_output: False
+        num_filters: 32
+        max_num_filters: 1024
+        num_downsamples: 3
+        num_res_blocks: 6
+        activation_norm_type: instance
+        weight_norm_type: spectral
+        flow_output_multiplier: 20
+        multi_spade_combine:
+            num_layers: 2
+            embed:
+                arch: unet
+                num_filters: 32
+                num_downsamples: 5
+                kernel_size: 3
+                sep_warp_embed: True
+                weight_norm_type: spectral
+        sep_prev_flow: False
+    embed:
+        use_embed: True
+        arch: encoderdecoder
+        num_filters: 32
+        num_downsamples: 5
+        kernel_size: 3
+        weight_norm_type: spectral
+
+# Discriminator configuration
+dis:
+    type: imaginaire.discriminators.fs_vid2vid
+    image:
+        num_filters: 32
+        max_num_filters: 512
+        num_discriminators: 2
+        num_layers: 4
+        weight_norm_type: spectral
+        activation_norm_type: instance
+
+# Use RAFT-based flow network (replaces FlowNet2)
+# RAFT is more modern, better performing, and doesn't require custom CUDA extensions
+flow_network:
+    type: imaginaire.third_party.flow_net.flow_net_raft
+
+# Data configuration for tennis pose dataset with YOLO skeletons
+data:
+    name: 'tennis_pose'
+    type: imaginaire.datasets.paired_few_shot_videos
+    num_frames_G: 2
+    num_frames_D: 2
+    initial_few_shot_K: 1
+    # No pose dataset specific processing - we use raw YOLO skeletons
+    has_foreground: False
+    num_workers: 4
+
+    input_types:
+        - images:
+            ext: jpg
+            num_channels: 3
+            normalize: True
+        - poses-yolo:
+            ext: png
+            num_channels: 3
+            is_mask: False
+            normalize: True
+
+    full_data_ops: imaginaire.model_utils.label::concat_labels,
+                   imaginaire.model_utils.label::concat_few_shot_labels
+
+    input_labels:
+        - poses-yolo
+
+    input_few_shot_labels:
+        - few_shot_poses-yolo
+
+    input_image:
+        - images
+
+    # Output dimensions must be divisible by 2^num_downsamples (2^5=32 for gen, 2^3=8 for flow)
+    # Using 256x512 which are both divisible by 32
+    output_h_w: 256, 512
+
+    train:
+        is_lmdb: True
+        roots:
+            - datasets/tennis_pose/lmdb/train
+        batch_size: 4  # Optimized for 2x A6000
+        initial_sequence_length: 4
+        max_sequence_length: 16
+        augmentations:
+            resize_h_w: 256, 512
+            horizontal_flip: False
+
+    val:
+        is_lmdb: True
+        roots:
+            - datasets/tennis_pose/lmdb/val
+        batch_size: 1
+        augmentations:
+            resize_h_w: 256, 512
+            horizontal_flip: False
+
+# Inference configuration
+inference_args:
+    finetune: True
+    finetune_iter: 100
+    few_shot_seq_index: 0
+    few_shot_frame_index: 0
+    driving_seq_index: 1
+
+# Test data configuration
+test_data:
+    name: 'tennis_pose'
+    type: imaginaire.datasets.paired_few_shot_videos
+    num_workers: 2
+    has_foreground: False
+    paired: True
+
+    input_types:
+        - images:
+            ext: jpg
+            num_channels: 3
+            normalize: True
+        - poses-yolo:
+            ext: png
+            num_channels: 3
+            is_mask: False
+            normalize: True
+
+    full_data_ops: imaginaire.model_utils.label::concat_labels,
+                   imaginaire.model_utils.label::concat_few_shot_labels
+
+    input_labels:
+        - poses-yolo
+
+    input_few_shot_labels:
+        - few_shot_poses-yolo
+
+    input_image:
+        - images
+
+    output_h_w: 256, 512
+
+    test:
+        is_lmdb: False
+        roots:
+            - datasets/tennis_pose/test/reference
+            - datasets/tennis_pose/test/driving
+        batch_size: 1
+        augmentations:
+            resize_smallest_side: 270
+            horizontal_flip: False
+
+# cuDNN configuration
+cudnn:
+    deterministic: False
+    benchmark: True

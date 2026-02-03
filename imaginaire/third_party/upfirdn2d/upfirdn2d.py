@@ -14,7 +14,14 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-import upfirdn2d_cuda
+# Try to import CUDA extension, fall back to reference implementation
+# Note: For PyTorch 2.x, the pure PyTorch fallback is actually preferred as
+# the CUDA extension has compatibility issues with newer PyTorch C++ APIs.
+try:
+    import upfirdn2d_cuda
+    HAS_CUDA_EXT = True
+except ImportError:
+    HAS_CUDA_EXT = False
 
 
 def _parse_scaling(scaling):
@@ -232,7 +239,7 @@ def upfirdn2d(x, f, up=1, down=1, padding=0, flip_filter=False, gain=1, impl='cu
     """
     assert isinstance(x, torch.Tensor)
     assert impl in ['ref', 'cuda']
-    if impl == 'cuda' and x.device.type == 'cuda':
+    if impl == 'cuda' and x.device.type == 'cuda' and HAS_CUDA_EXT:
         return _upfirdn2d_cuda(up=up, down=down, padding=padding,
                                flip_filter=flip_filter, gain=gain).apply(x, f)
     return _upfirdn2d_ref(x, f, up=up, down=down, padding=padding, flip_filter=flip_filter, gain=gain)

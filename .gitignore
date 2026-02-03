@@ -2,6 +2,7 @@ checkpoints/
 .idea/
 logs/
 results/
+datasets/
 
 .vscode
 *.ipynb

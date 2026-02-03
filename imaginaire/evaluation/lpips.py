@@ -79,7 +79,7 @@ class LPNet(nn.Module):
         super(LPNet, self).__init__()
 
         self.scaling_layer = ScalingLayer()
-        self.net = vgg16(pretrained=True, requires_grad=False)
+        self.net = vgg16(weights=tv.VGG16_Weights.IMAGENET1K_V1, requires_grad=False)
         self.L = 5
         dims = [64, 128, 256, 512, 512]
         self.lins = nn.ModuleList([NetLinLayer(dims[i]) for i in range(self.L)])
@@ -113,9 +113,10 @@ class LPNet(nn.Module):
 
 
 class vgg16(torch.nn.Module):
-    def __init__(self, requires_grad=False, pretrained=True):
+    def __init__(self, requires_grad=False, weights=None):
         super(vgg16, self).__init__()
-        vgg_pretrained_features = tv.vgg16(pretrained=pretrained).features
+        vgg_weights = weights if weights is not None else tv.VGG16_Weights.IMAGENET1K_V1
+        vgg_pretrained_features = tv.vgg16(weights=vgg_weights).features
         self.slice1 = torch.nn.Sequential()
         self.slice2 = torch.nn.Sequential()
         self.slice3 = torch.nn.Sequential()

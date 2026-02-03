@@ -63,7 +63,8 @@ class Trainer(BaseTrainer):
             self.sequence_length_max = \
                 min(getattr(cfg.data.train, 'max_sequence_length', 100),
                     self.train_dataset.sequence_length_max)
-        self.Tensor = torch.cuda.FloatTensor
+        # Use modern tensor creation instead of deprecated torch.cuda.FloatTensor
+        self._cuda_device = 'cuda'
         self.has_fg = getattr(cfg.data, 'has_foreground', False)
 
         self.net_G_output = self.data_prev = None
@@ -468,89 +469,100 @@ class Trainer(BaseTrainer):
             net_G_output (dict): Output of the generator.
             net_D_output (dict): Output of the discriminator.
         """
-        with autocast('cuda', enabled=self.cfg.trainer.amp_config.enabled):
-            # Individual frame GAN loss and feature matching loss.
-            self.gen_losses['GAN'], self.gen_losses['FeatureMatching'] = \
-                self.compute_gan_losses(net_D_output['indv'],
-                                        dis_update=False)
+        update_finished = False
+        while not update_finished:
+            with autocast("cuda", enabled=self.cfg.trainer.amp_config.enabled):
+                # Individual frame GAN loss and feature matching loss.
+                self.gen_losses['GAN'], self.gen_losses['FeatureMatching'] = \
+                    self.compute_gan_losses(net_D_output['indv'],
+                                            dis_update=False)
 
-            # Perceptual loss.
-            self.gen_losses['Perceptual'] = self.criteria['Perceptual'](
-                net_G_output['fake_images'], data_t['image'])
-
-            # L1 loss.
-            if getattr(self.cfg.trainer.loss_weight, 'L1', 0) > 0:
-                self.gen_losses['L1'] = self.criteria['L1'](
+                # Perceptual loss.
+                self.gen_losses['Perceptual'] = self.criteria['Perceptual'](
                     net_G_output['fake_images'], data_t['image'])
 
-            # Raw (hallucinated) output image losses (GAN and perceptual).
-            if 'raw' in net_D_output:
-                raw_GAN_losses = self.compute_gan_losses(
-                    net_D_output['raw'], dis_update=False
+                # L1 loss.
+                if getattr(self.cfg.trainer.loss_weight, 'L1', 0) > 0:
+                    self.gen_losses['L1'] = self.criteria['L1'](
+                        net_G_output['fake_images'], data_t['image'])
+
+                # Raw (hallucinated) output image losses (GAN and perceptual).
+                if 'raw' in net_D_output:
+                    raw_GAN_losses = self.compute_gan_losses(
+                        net_D_output['raw'], dis_update=False
+                    )
+                    fg_mask = get_fg_mask(data_t['label'], self.has_fg)
+                    raw_perceptual_loss = self.criteria['Perceptual'](
+                        net_G_output['fake_raw_images'] * fg_mask,
+                        data_t['image'] * fg_mask)
+                    self.gen_losses['GAN'] += raw_GAN_losses[0]
+                    self.gen_losses['FeatureMatching'] += raw_GAN_losses[1]
+                    self.gen_losses['Perceptual'] += raw_perceptual_loss
+
+                # Additional discriminator losses.
+                if self.add_dis_cfg is not None:
+                    for name in self.add_dis_cfg:
+                        (self.gen_losses['GAN_' + name],
+                         self.gen_losses['FeatureMatching_' + name]) = \
+                            self.compute_gan_losses(net_D_output[name],
+                                                    dis_update=False)
+
+                # Flow and mask loss.
+                if self.use_flow:
+                    (self.gen_losses['Flow_L1'], self.gen_losses['Flow_Warp'],
+                     self.gen_losses['Flow_Mask']) = self.criteria['Flow'](
+                        data_t, net_G_output, self.current_epoch)
+
+                # Temporal GAN loss and feature matching loss.
+                if self.cfg.trainer.loss_weight.temporal_gan > 0:
+                    if self.sequence_length > 1:
+                        for s in range(self.num_temporal_scales):
+                            loss_GAN, loss_FM = self.compute_gan_losses(
+                                net_D_output['temporal_%d' % s],
+                                dis_update=False
+                            )
+                            self.gen_losses['GAN_T%d' % s] = loss_GAN
+                            self.gen_losses['FeatureMatching_T%d' % s] = loss_FM
+
+                # Other custom losses.
+                self._get_custom_gen_losses(data_t, net_G_output, net_D_output)
+
+                # Sum all losses together.
+                total_loss = torch.zeros(1, device=self._cuda_device, dtype=torch.float32)
+                for key in self.gen_losses:
+                    if key != 'total':
+                        total_loss += self.gen_losses[key] * self.weights[key]
+                self.gen_losses['total'] = total_loss
+
+            # Zero-grad and backpropagate the loss.
+            self.opt_G.zero_grad(set_to_none=True)
+            self.scaler_G.scale(total_loss).backward()
+
+            # Optionally clip gradient norm.
+            if hasattr(self.cfg.gen_opt, 'clip_grad_norm'):
+                self.scaler_G.unscale_(self.opt_G)
+                total_norm = torch.nn.utils.clip_grad_norm_(
+                    self.net_G_module.parameters(),
+                    self.cfg.gen_opt.clip_grad_norm
                 )
-                fg_mask = get_fg_mask(data_t['label'], self.has_fg)
-                raw_perceptual_loss = self.criteria['Perceptual'](
-                    net_G_output['fake_raw_images'] * fg_mask,
-                    data_t['image'] * fg_mask)
-                self.gen_losses['GAN'] += raw_GAN_losses[0]
-                self.gen_losses['FeatureMatching'] += raw_GAN_losses[1]
-                self.gen_losses['Perceptual'] += raw_perceptual_loss
+                if torch.isfinite(total_norm) and \
+                        total_norm > self.cfg.gen_opt.clip_grad_norm:
+                    print(f"Gradient norm of the generator ({total_norm}) "
+                          f"too large, clipping it to "
+                          f"{self.cfg.gen_opt.clip_grad_norm}.")
 
-            # Additional discriminator losses.
-            if self.add_dis_cfg is not None:
-                for name in self.add_dis_cfg:
-                    (self.gen_losses['GAN_' + name],
-                     self.gen_losses['FeatureMatching_' + name]) = \
-                        self.compute_gan_losses(net_D_output[name],
-                                                dis_update=False)
-
-            # Flow and mask loss.
-            if self.use_flow:
-                (self.gen_losses['Flow_L1'], self.gen_losses['Flow_Warp'],
-                 self.gen_losses['Flow_Mask']) = self.criteria['Flow'](
-                    data_t, net_G_output, self.current_epoch)
-
-            # Temporal GAN loss and feature matching loss.
-            if self.cfg.trainer.loss_weight.temporal_gan > 0:
-                if self.sequence_length > 1:
-                    for s in range(self.num_temporal_scales):
-                        loss_GAN, loss_FM = self.compute_gan_losses(
-                            net_D_output['temporal_%d' % s],
-                            dis_update=False
-                        )
-                        self.gen_losses['GAN_T%d' % s] = loss_GAN
-                        self.gen_losses['FeatureMatching_T%d' % s] = loss_FM
-
-            # Other custom losses.
-            self._get_custom_gen_losses(data_t, net_G_output, net_D_output)
-
-            # Sum all losses together.
-            total_loss = torch.zeros(1, device='cuda')[0]
-            for key in self.gen_losses:
-                if key != 'total':
-                    total_loss = total_loss + self.gen_losses[key] * self.weights[key]
-            self.gen_losses['total'] = total_loss
-
-        # Zero-grad and backpropagate the loss.
-        self.opt_G.zero_grad(set_to_none=True)
-        self.scaler_G.scale(total_loss).backward()
-
-        # Optionally clip gradient norm.
-        if hasattr(self.cfg.gen_opt, 'clip_grad_norm'):
-            self.scaler_G.unscale_(self.opt_G)
-            total_norm = torch.nn.utils.clip_grad_norm_(
-                self.net_G_module.parameters(),
-                self.cfg.gen_opt.clip_grad_norm
-            )
-            if torch.isfinite(total_norm) and \
-                    total_norm > self.cfg.gen_opt.clip_grad_norm:
-                print(f"Gradient norm of the generator ({total_norm}) "
-                      f"too large, clipping it to "
-                      f"{self.cfg.gen_opt.clip_grad_norm}.")
-
-        # Perform an optimizer step.
-        self.scaler_G.step(self.opt_G)
-        self.scaler_G.update()
+            # Perform an optimizer step.
+            # Track scale before step to detect overflow
+            old_scale = self.scaler_G.get_scale()
+            self.scaler_G.step(self.opt_G)
+            self.scaler_G.update()
+            new_scale = self.scaler_G.get_scale()
+            # Whether the step above was skipped (scale decreased means overflow).
+            if new_scale < old_scale:
+                print("Generator overflowed!")
+            else:
+                self.step_count_G += 1
+                update_finished = True
 
     def _get_custom_gen_losses(self, data_t, net_G_output, net_D_output):
         r"""All other custom generator losses go here.
@@ -568,66 +580,77 @@ class Trainer(BaseTrainer):
         Args:
             net_D_output (dict): Output of the discriminator.
         """
-        with autocast('cuda', enabled=self.cfg.trainer.amp_config.enabled):
-            # Individual frame GAN loss.
-            self.dis_losses['GAN'] = self.compute_gan_losses(
-                net_D_output['indv'], dis_update=True
-            )
+        update_finished = False
+        while not update_finished:
+            with autocast("cuda", enabled=self.cfg.trainer.amp_config.enabled):
+                # Individual frame GAN loss.
+                self.dis_losses['GAN'] = self.compute_gan_losses(
+                    net_D_output['indv'], dis_update=True
+                )
 
-            # Raw (hallucinated) output image GAN loss.
-            if 'raw' in net_D_output:
-                raw_loss = self.compute_gan_losses(net_D_output['raw'],
-                                                   dis_update=True)
-                self.dis_losses['GAN'] += raw_loss
+                # Raw (hallucinated) output image GAN loss.
+                if 'raw' in net_D_output:
+                    raw_loss = self.compute_gan_losses(net_D_output['raw'],
+                                                       dis_update=True)
+                    self.dis_losses['GAN'] += raw_loss
 
-            # Additional GAN loss.
-            if self.add_dis_cfg is not None:
-                for name in self.add_dis_cfg:
-                    self.dis_losses['GAN_' + name] = \
-                        self.compute_gan_losses(net_D_output[name],
-                                                dis_update=True)
+                # Additional GAN loss.
+                if self.add_dis_cfg is not None:
+                    for name in self.add_dis_cfg:
+                        self.dis_losses['GAN_' + name] = \
+                            self.compute_gan_losses(net_D_output[name],
+                                                    dis_update=True)
 
-            # Temporal GAN loss.
-            if self.cfg.trainer.loss_weight.temporal_gan > 0:
-                if self.sequence_length > 1:
-                    for s in range(self.num_temporal_scales):
-                        self.dis_losses['GAN_T%d' % s] = \
-                            self.compute_gan_losses(
-                                net_D_output['temporal_%d' % s],
-                                dis_update=True
-                            )
+                # Temporal GAN loss.
+                if self.cfg.trainer.loss_weight.temporal_gan > 0:
+                    if self.sequence_length > 1:
+                        for s in range(self.num_temporal_scales):
+                            self.dis_losses['GAN_T%d' % s] = \
+                                self.compute_gan_losses(
+                                    net_D_output['temporal_%d' % s],
+                                    dis_update=True
+                                )
 
-            # Other custom losses.
-            self._get_custom_dis_losses(net_D_output)
+                # Other custom losses.
+                self._get_custom_dis_losses(net_D_output)
 
-            # Sum all losses together.
-            total_loss = torch.zeros(1, device='cuda')[0]
-            for key in self.dis_losses:
-                if key != 'total':
-                    total_loss = total_loss + self.dis_losses[key] * self.weights[key]
-            self.dis_losses['total'] = total_loss
+                # Sum all losses together.
+                total_loss = torch.zeros(1, device=self._cuda_device, dtype=torch.float32)
+                for key in self.dis_losses:
+                    if key != 'total':
+                        total_loss += self.dis_losses[key] * self.weights[key]
+                self.dis_losses['total'] = total_loss
 
-        # Zero-grad and backpropagate the loss.
-        self.opt_D.zero_grad(set_to_none=True)
-        self._time_before_backward()
-        self.scaler_D.scale(total_loss).backward()
+            # Zero-grad and backpropagate the loss.
+            self.opt_D.zero_grad(set_to_none=True)
+            self._time_before_backward()
+            self.scaler_D.scale(total_loss).backward()
 
-        # Optionally clip gradient norm.
-        if hasattr(self.cfg.dis_opt, 'clip_grad_norm'):
-            self.scaler_D.unscale_(self.opt_D)
-            total_norm = torch.nn.utils.clip_grad_norm_(
-                self.net_D.parameters(), self.cfg.dis_opt.clip_grad_norm
-            )
-            if torch.isfinite(total_norm) and \
-                    total_norm > self.cfg.dis_opt.clip_grad_norm:
-                print(f"Gradient norm of the discriminator ({total_norm}) "
-                      f"too large, clipping it to "
-                      f"{self.cfg.dis_opt.clip_grad_norm}.")
+            # Optionally clip gradient norm.
+            if hasattr(self.cfg.dis_opt, 'clip_grad_norm'):
+                self.scaler_D.unscale_(self.opt_D)
+                total_norm = torch.nn.utils.clip_grad_norm_(
+                    self.net_D.parameters(), self.cfg.dis_opt.clip_grad_norm
+                )
+                if torch.isfinite(total_norm) and \
+                        total_norm > self.cfg.dis_opt.clip_grad_norm:
+                    print(f"Gradient norm of the discriminator ({total_norm}) "
+                          f"too large, clipping it to "
+                          f"{self.cfg.dis_opt.clip_grad_norm}.")
 
-        # Perform an optimizer step.
-        self._time_before_step()
-        self.scaler_D.step(self.opt_D)
-        self.scaler_D.update()
+            # Perform an optimizer step.
+            self._time_before_step()
+            # Track scale before step to detect overflow
+            old_scale = self.scaler_D.get_scale()
+            self.scaler_D.step(self.opt_D)
+            self.scaler_D.update()
+            new_scale = self.scaler_D.get_scale()
+            # Whether the step above was skipped (scale decreased means overflow).
+            if new_scale < old_scale:
+                print("Discriminator overflowed!")
+            else:
+                self.step_count_D += 1
+                update_finished = True
 
     def _get_custom_dis_losses(self, net_D_output):
         r"""All other custom losses go here.
@@ -645,8 +668,9 @@ class Trainer(BaseTrainer):
             dis_update (bool): Whether to update discriminator.
         """
         if net_D_output['pred_fake'] is None:
-            return torch.zeros(1, device='cuda')[0] if dis_update else [
-                torch.zeros(1, device='cuda')[0], torch.zeros(1, device='cuda')[0]]
+            return torch.zeros(1, device=self._cuda_device, dtype=torch.float32) if dis_update else [
+                torch.zeros(1, device=self._cuda_device, dtype=torch.float32),
+                torch.zeros(1, device=self._cuda_device, dtype=torch.float32)]
         if dis_update:
             # Get the GAN loss for real/fake outputs.
             GAN_loss = \

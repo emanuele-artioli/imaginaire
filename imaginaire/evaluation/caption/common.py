@@ -29,7 +29,7 @@ def get_image_encoder(aws_credentials=None):
             s3.download_file('lpi-poe', 'model_zoo/ViT-B-32.pt', model_path)
         else:
             download_file_from_google_drive("1Ri5APYM34A_IjG4F3Admutsf2oUwDjfW", model_path)
-    model = torch.load(model_path, map_location='cpu', weights_only=False)
+    model = torch.load(model_path, map_location='cpu')
 
     if dist.is_initialized() and is_local_master():
         # Make sure only the first process in distributed training downloads the model, and the others use the cache.

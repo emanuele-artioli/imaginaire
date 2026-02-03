@@ -5,7 +5,14 @@ from types import SimpleNamespace
 import torch
 from torch import nn
 
-import bias_act_cuda
+# Try to import CUDA extension, fall back to reference implementation
+# Note: For PyTorch 2.x, the pure PyTorch fallback is actually preferred as
+# the CUDA extension has compatibility issues with newer PyTorch C++ APIs.
+try:
+    import bias_act_cuda
+    HAS_CUDA_EXT = True
+except ImportError:
+    HAS_CUDA_EXT = False
 
 # ----------------------------------------------------------------------------
 
@@ -47,7 +54,7 @@ def _bias_act(x, b=None, dim=1, act='linear', alpha=None, gain=None, clamp=None,
               impl='cuda'):
     assert isinstance(x, torch.Tensor)
     assert impl in ['ref', 'cuda']
-    if impl == 'cuda' and x.device.type == 'cuda':
+    if impl == 'cuda' and x.device.type == 'cuda' and HAS_CUDA_EXT:
         return _bias_act_cuda(dim=dim, act=act, alpha=alpha, gain=gain,
                               clamp=clamp).apply(x, b)
     return _bias_act_ref(x=x, b=b, dim=dim, act=act, alpha=alpha, gain=gain,

@@ -5,7 +5,7 @@
 # The file is duplicated from https://github.com/NVIDIA/flownet2-pytorch
 # with some modifications.
 from torch.nn import init
-import correlation
+from imaginaire.third_party.correlation import correlation
 import torch
 import torch.nn as nn
 from .submodules import conv, predict_flow, deconv, tofp16, tofp32

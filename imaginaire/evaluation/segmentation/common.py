@@ -32,7 +32,7 @@ def get_segmentation_hist_model(dataset_name, aws_credentials=None):
                 s3.download_file('lpi-poe', 'model_zoo/celebamask_hq.pt', model_path)
             else:
                 download_file_from_google_drive("1o1m-eT38zNCIFldcRaoWcLvvBtY8S4W3", model_path)
-        state_dict = torch.load(model_path, map_location='cpu', weights_only=False)
+        state_dict = torch.load(model_path, map_location='cpu')
         seg_network.load_state_dict(state_dict)
     elif dataset_name == "cocostuff" or dataset_name == "getty":
         from imaginaire.evaluation.segmentation.cocostuff import DeepLabV2

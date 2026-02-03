@@ -189,7 +189,7 @@ class _PerceptualNetwork(nn.Module):
 
 def _vgg19(layers):
     r"""Get vgg19 layers"""
-    vgg = torchvision.models.vgg19(pretrained=True)
+    vgg = torchvision.models.vgg19(weights=torchvision.models.VGG19_Weights.IMAGENET1K_V1)
     # network = vgg.features
     network = torch.nn.Sequential(*(list(vgg.features) + [vgg.avgpool] + [nn.Flatten()] + list(vgg.classifier)))
     layer_name_mapping = {1: 'relu_1_1',
@@ -215,7 +215,7 @@ def _vgg19(layers):
 
 def _vgg16(layers):
     r"""Get vgg16 layers"""
-    network = torchvision.models.vgg16(pretrained=True).features
+    network = torchvision.models.vgg16(weights=torchvision.models.VGG16_Weights.IMAGENET1K_V1).features
     layer_name_mapping = {1: 'relu_1_1',
                           3: 'relu_1_2',
                           6: 'relu_2_1',
@@ -232,7 +232,7 @@ def _vgg16(layers):
 
 def _alexnet(layers):
     r"""Get alexnet layers"""
-    network = torchvision.models.alexnet(pretrained=True).features
+    network = torchvision.models.alexnet(weights=torchvision.models.AlexNet_Weights.IMAGENET1K_V1).features
     layer_name_mapping = {0: 'conv_1',
                           1: 'relu_1',
                           3: 'conv_2',
@@ -248,7 +248,7 @@ def _alexnet(layers):
 
 def _inception_v3(layers):
     r"""Get inception v3 layers"""
-    inception = torchvision.models.inception_v3(pretrained=True)
+    inception = torchvision.models.inception_v3(weights=torchvision.models.Inception_V3_Weights.IMAGENET1K_V1)
     network = nn.Sequential(inception.Conv2d_1a_3x3,
                             inception.Conv2d_2a_3x3,
                             inception.Conv2d_2b_3x3,
@@ -277,7 +277,7 @@ def _inception_v3(layers):
 
 def _resnet50(layers):
     r"""Get resnet50 layers"""
-    resnet50 = torchvision.models.resnet50(pretrained=True)
+    resnet50 = torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.IMAGENET1K_V1)
     network = nn.Sequential(resnet50.conv1,
                             resnet50.bn1,
                             resnet50.relu,
