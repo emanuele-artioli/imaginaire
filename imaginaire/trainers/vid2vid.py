@@ -525,10 +525,10 @@ class Trainer(BaseTrainer):
             self._get_custom_gen_losses(data_t, net_G_output, net_D_output)
 
             # Sum all losses together.
-            total_loss = self.Tensor(1).fill_(0)
+            total_loss = torch.zeros(1, device='cuda')[0]
             for key in self.gen_losses:
                 if key != 'total':
-                    total_loss += self.gen_losses[key] * self.weights[key]
+                    total_loss = total_loss + self.gen_losses[key] * self.weights[key]
             self.gen_losses['total'] = total_loss
 
         # Zero-grad and backpropagate the loss.
@@ -601,10 +601,10 @@ class Trainer(BaseTrainer):
             self._get_custom_dis_losses(net_D_output)
 
             # Sum all losses together.
-            total_loss = self.Tensor(1).fill_(0)
+            total_loss = torch.zeros(1, device='cuda')[0]
             for key in self.dis_losses:
                 if key != 'total':
-                    total_loss += self.dis_losses[key] * self.weights[key]
+                    total_loss = total_loss + self.dis_losses[key] * self.weights[key]
             self.dis_losses['total'] = total_loss
 
         # Zero-grad and backpropagate the loss.
@@ -645,8 +645,8 @@ class Trainer(BaseTrainer):
             dis_update (bool): Whether to update discriminator.
         """
         if net_D_output['pred_fake'] is None:
-            return self.Tensor(1).fill_(0) if dis_update else [
-                self.Tensor(1).fill_(0), self.Tensor(1).fill_(0)]
+            return torch.zeros(1, device='cuda')[0] if dis_update else [
+                torch.zeros(1, device='cuda')[0], torch.zeros(1, device='cuda')[0]]
         if dis_update:
             # Get the GAN loss for real/fake outputs.
             GAN_loss = \

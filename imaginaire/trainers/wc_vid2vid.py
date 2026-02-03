@@ -292,7 +292,7 @@ class Trainer(Vid2VidTrainer):
             self.gen_losses['Guidance'] = self.criteria['Guidance'](
                 net_G_output['fake_images'], guidance_image, guidance_mask)
         else:
-            self.gen_losses['Guidance'] = self.Tensor(1).fill_(0)
+            self.gen_losses['Guidance'] = torch.zeros(1, device='cuda')[0]
 
     def get_data_t(self, data, net_G_output, data_prev, t):
         r"""Get data at current time frame given the sequence of data.

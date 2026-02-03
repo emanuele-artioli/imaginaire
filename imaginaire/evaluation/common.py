@@ -587,7 +587,7 @@ def load_or_compute_activations(act_path, data_loader, key_real, key_fake,
     if act_path is not None and os.path.exists(act_path):
         # Loading precomputed activations.
         print('Load activations from {}'.format(act_path))
-        act = torch.load(act_path, map_location='cpu').cuda()
+        act = torch.load(act_path, map_location='cpu', weights_only=False).cuda()
     else:
         # Compute activations.
         if is_video:

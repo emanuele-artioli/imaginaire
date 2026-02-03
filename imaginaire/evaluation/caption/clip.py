@@ -102,7 +102,7 @@ def load(model_path):
                 print(e)
                 sleep(30)
                 continue
-    model = torch.load(model_path, map_location='cpu')
+    model = torch.load(model_path, map_location='cpu', weights_only=False)
     model = build_model(model).cuda()
     return model, _transform(model.visual.input_resolution)
 

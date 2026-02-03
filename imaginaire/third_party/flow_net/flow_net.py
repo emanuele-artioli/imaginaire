@@ -29,7 +29,8 @@ class FlowNet(nn.Module):
                 flownet2_path = get_checkpoint('flownet2.pth.tar',
                                                '1hF8vS6YeHkx3j2pfCeQqqZGwA_PJq_Da')
                 checkpoint = torch.load(flownet2_path,
-                                        map_location=torch.device('cpu'))
+                                        map_location=torch.device('cpu'),
+                                        weights_only=False)
                 self.flowNet.load_state_dict(checkpoint['state_dict'])
                 print('FlowNet2 pretrained weights loaded successfully.')
             except Exception as e:

@@ -33,7 +33,7 @@ class GauGANLoader(object):
         default_checkpoint_path = os.path.basename(gaugan_cfg.config).split('.yaml')[0] + '-' + \
             cfg.pretrained_weight + '.pt'
         checkpoint = get_checkpoint(default_checkpoint_path, cfg.pretrained_weight)
-        ckpt = torch.load(checkpoint)
+        ckpt = torch.load(checkpoint, weights_only=False)
 
         net_G = WrappedModel(ModelAverage(SPADEGenerator(cfg.gen, cfg.data).to('cuda')))
         net_G.load_state_dict(ckpt['net_G'])
